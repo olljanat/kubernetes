@@ -50,6 +50,10 @@ type Interface interface {
 	ListSets() ([]string, error)
 	// GetVersion returns the "X.Y" version string for ipset.
 	GetVersion() (string, error)
+	// SaveAllSets to run ipset save command to save all sets and entries.
+	SaveAllSets() ([]byte, error)
+	// RestoreSets to run ipset restore to restore sets and entries
+	RestoreSets(data []byte) error
 }
 
 // IPSetCmd represents the ipset util. We use ipset command for ipset execute.
@@ -121,8 +125,23 @@ func (set *IPSet) Validate() error {
 	return nil
 }
 
+func (set *IPSet) String() string {
+	args := []string{set.Name, string(set.SetType)}
+	if set.SetType == HashIPPortIP || set.SetType == HashIPPort || set.SetType == HashIPPortNet {
+		args = append(args,
+			"family", set.HashFamily,
+			"hashsize", strconv.Itoa(set.HashSize),
+			"maxelem", strconv.Itoa(set.MaxElem),
+		)
+	}
+	if set.SetType == BitmapPort {
+		args = append(args, "range", set.PortRange)
+	}
+	return strings.Join(args, " ")
+}
+
 // setIPSetDefaults sets some IPSet fields if not present to their default values.
-func (set *IPSet) setIPSetDefaults() {
+func (set *IPSet) SetIPSetDefaults() {
 	// Setting default values if not present
 	if set.HashSize == 0 {
 		set.HashSize = 1024
@@ -282,7 +301,7 @@ func New(exec utilexec.Interface) Interface {
 // CreateSet creates a new set, it will ignore error when the set already exists if ignoreExistErr=true.
 func (runner *runner) CreateSet(set *IPSet, ignoreExistErr bool) error {
 	// sets some IPSet fields if not present to their default values.
-	set.setIPSetDefaults()
+	set.SetIPSetDefaults()
 
 	// Validate ipset before creating
 	if err := set.Validate(); err != nil {
@@ -294,17 +313,7 @@ func (runner *runner) CreateSet(set *IPSet, ignoreExistErr bool) error {
 // If ignoreExistErr is set to true, then the -exist option of ipset will be specified, ipset ignores the error
 // otherwise raised when the same set (setname and create parameters are identical) already exists.
 func (runner *runner) createSet(set *IPSet, ignoreExistErr bool) error {
-	args := []string{"create", set.Name, string(set.SetType)}
-	if set.SetType == HashIPPortIP || set.SetType == HashIPPort || set.SetType == HashIPPortNet || set.SetType == HashIP {
-		args = append(args,
-			"family", set.HashFamily,
-			"hashsize", strconv.Itoa(set.HashSize),
-			"maxelem", strconv.Itoa(set.MaxElem),
-		)
-	}
-	if set.SetType == BitmapPort {
-		args = append(args, "range", set.PortRange)
-	}
+	args := []string{"create", set.String()}
 	if ignoreExistErr {
 		args = append(args, "-exist")
 	}
@@ -404,6 +413,25 @@ func (runner *runner) ListEntries(set string) ([]string, error) {
 		}
 	}
 	return results, nil
+}
+
+// SaveAllSets is part of Interface.
+func (runner *runner) SaveAllSets() ([]byte, error) {
+	data, err := runner.exec.Command(IPSetCmd, "save").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("save sets err: %v", err)
+	}
+	return data, nil
+}
+
+// RestoreAll is part of Interface.
+func (runner *runner) RestoreSets(data []byte) error {
+	cmd := runner.exec.Command(IPSetCmd, "restore")
+	cmd.SetStdin(bytes.NewBuffer(data))
+	if _, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("restore sets err: %v", err)
+	}
+	return nil
 }
 
 // GetVersion returns the version string.
